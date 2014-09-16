@@ -1,9 +1,12 @@
+#!/usr/bin/env python3.4
+# -*- coding: utf-8 -*-
+
 import sys
+import json
 import argparse
 from datetime import datetime
 
 import requests
-import hypchat
 
 __version__ = '0.1.0'
 
@@ -21,20 +24,35 @@ def filter_menu_data(places, filter_ids=None):
 def generate_message(place):
     today = datetime.now().strftime('%Y-%m-%d')
 
-    items = ''.join(
-        '<li>{0}</li>'.format(item['itemDescription'])
-        for item in place['items'] if item['date'] == today
+    menus = {
+        menu['name']: ''.join(
+            '<li>{0}</li>'.format(course)
+            for course in menu['itemDescription'].split('\n')
+        )
+        for menu in place['items'] if menu['date'] == today
+    }
+
+    return ''.join(
+        '<strong>{0}:</strong><ul>{1}</ul>'.format(
+            place['name'] + (' ' + menu_name if menu_name else ''), menu_items
+        )
+        for menu_name, menu_items in menus.items()
     )
 
-    return '<strong>{0}:</strong><ul>{1}</ul>'.format(place['name'], items)
 
+def send_hipchat_notification(message, room, token):
+    url = 'https://api.hipchat.com/v2/room/{0}/notification?auth_token={1}'
+    data = {
+        'message': message,
+        'notify': True,
+        'color': 'green'
+    }
 
-def send_hipchat_notification(message, token, rooms):
-    hipchat = hypchat.HypChat(token)
-
-    for room_name in rooms:
-        room = hipchat.get_room(room_name)
-        room.notification(message, color='green', notify=True)
+    return requests.post(
+        url.format(room, token),
+        json.dumps(data),
+        headers={'Content-Type': 'application/json'}
+    )
 
 
 def main():
@@ -47,30 +65,35 @@ def main():
         '-t', '--hipchat-token', help='the HipChat token to authenticate with'
     )
     parser.add_argument(
-        '-r', '--hipchat-rooms', help='the HipChat rooms to notify', nargs='*'
+        '-r', '--hipchat-room', help='the HipChat room to notify'
     )
     parser.add_argument(
-        '-p', '--place-ids', help='the IDs of the places to check', nargs='*'
+        '-p', '--place-ids', help='the IDs of the places to check', nargs='*',
+        type=int
     )
     parser.add_argument(
-        '-o', '--output', help='the file to write to', default=sys.stdout
+        '-o', '--output', help='the file to write to',
+        default=sys.stdout, type=lambda x: open(x, 'w')
     )
     parser.add_argument(
         '--version', action='version', version='%(prog)s ' + __version__
     )
-    config = parser.parse_args(sys.argv)
+    config = parser.parse_args(sys.argv[1:])
 
     places = load_menu_data(config.source_url)
     places = filter_menu_data(places, config.place_ids)
     for place in places:
+        if not place['items']:
+            continue
+
         message = generate_message(place)
+
         if config.hipchat_token:
             send_hipchat_notification(
-                message, config.hipchat_token, config.hipchat_rooms
+                message, config.hipchat_room, config.hipchat_token
             )
         else:
-            with open(config.output, 'w') as output:
-                output.write(message) + '\n'
+            config.output.write(message + '\n')
 
 
 if __name__ == '__main__':
